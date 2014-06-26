@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import nibabel as nb
 
-from joblib import Parallel, delayed
+from joblib import Memory, Parallel, delayed
 from nipy.modalities.fmri.design_matrix import make_dmtx
 from nipy.modalities.fmri.experimental_paradigm import EventRelatedParadigm
 from nipy.modalities.fmri.experimental_paradigm import BlockParadigm
@@ -33,7 +33,7 @@ def _csv_to_dict(path, key_end_pos=1, join_values=False, delimiter=' ', quotecha
 
     data = []
     with open(path, 'rb') as f:
-        # look for studid separators
+        # look for stupid separators
         f = _check_csv_file(f, delimiter=delimiter)
         reader = csv.reader(f, delimiter=delimiter, quotechar=quotechar)
         for row in reader:
@@ -48,7 +48,7 @@ def _csv_to_dict(path, key_end_pos=1, join_values=False, delimiter=' ', quotecha
                     value = join_values.join(value)
                 data.append((key, value))
     return dict(data)
-
+    
 
 def _collect_openfmri_dataset(study_dir):
     # parse study-level metadata files
@@ -74,15 +74,17 @@ def _collect_openfmri_dataset(study_dir):
         model_id = os.path.basename(model_dir.strip())
 
         model[model_id] = {}
-        model[model_id]['conditions'] = _csv_to_dict(
-            join_model('condition_key.txt'), key_end_pos=2)
+        if exists(join_model('condition_key.txt')):
+            model[model_id]['conditions'] = _csv_to_dict(
+                join_model('condition_key.txt'), key_end_pos=2)
 
-        model[model_id]['contrasts'] = _csv_to_dict(
-            join_model('task_contrasts.txt'), key_end_pos=2)
+        if exists(join_model('task_contrasts.txt')):
+            model[model_id]['contrasts'] = _csv_to_dict(
+                join_model('task_contrasts.txt'), key_end_pos=2)
 
     # parse subject-level files and align it with study and model
-    structural = {}
-    functional = {}
+    structural = []
+    functional = []
     conditions = {}
     contrasts = {}
 
@@ -91,44 +93,72 @@ def _collect_openfmri_dataset(study_dir):
         subject_id = os.path.basename(subject_dir.strip())
 
         # Anatomy data
+        preproc_anat = {}
+        anat_files = join_subject('model', '*', 'anatomy', 'highres001.nii.gz')
+        for anat_file in sorted(glob.glob(anat_files)):
+            model_id, _, _ = anat_file.split(os.path.sep)[-3:]
+            preproc_anat.setdefault('study', []).append(study_id)
+            preproc_anat.setdefault('subject', []).append(subject_id)
+            preproc_anat.setdefault('model', []).append(model_id)
+            preproc_anat.setdefault('preproc_anatomy', []).append(anat_file)
+        preproc_anat = pd.DataFrame(preproc_anat)
+
+        raw_anat = {}
         anat_file = join_subject('anatomy', 'highres001.nii.gz')
         anat_file = anat_file if os.path.exists(anat_file) else np.nan
-        structural.setdefault('study', []).append(study_id)
-        structural.setdefault('subject', []).append(subject_id)
-        structural.setdefault('anatomy', []).append(anat_file)
+        raw_anat.setdefault('study', []).append(study_id)
+        raw_anat.setdefault('subject', []).append(subject_id)
+        raw_anat.setdefault('raw_anatomy', []).append(anat_file)
+        raw_anat = pd.DataFrame(raw_anat)
+
+        if raw_anat.shape[0] == 0:
+            anat = preproc_anat
+        elif preproc_anat.shape[0] == 0:
+            anat = raw_anat
+        else:  
+            anat = preproc_anat.merge(raw_anat)
+        structural.append(anat)
 
         # BOLD data
+        preproc_func = {}
         bold_files = join_subject('model', '*', 'BOLD', '*', 'bold.nii.gz')
-        n_bold = 0
         for bold_file in sorted(glob.glob(bold_files)):
             model_id, _, session_id, _ = bold_file.split(os.path.sep)[-4:]
-            raw_bold_file = join_subject('BOLD', session_id, 'bold.nii.gz')
-            raw_bold_file = raw_bold_file if os.path.exists(raw_bold_file) else np.nan
             task_id, run_id = session_id.split('_')
+            movement_file = os.path.join(os.path.split(bold_file)[0], 'motion.txt')
+            movement_file = movement_file if exists(movement_file) else np.nan
+            preproc_func.setdefault('study', []).append(study_id)
+            preproc_func.setdefault('subject', []).append(subject_id)
+            preproc_func.setdefault('model', []).append(model_id)
+            preproc_func.setdefault('task', []).append(task_id)
+            preproc_func.setdefault('task_name', []).append(dataset.get(task_id, task_id))            
+            preproc_func.setdefault('run', []).append(run_id)
+            preproc_func.setdefault('preproc_bold', []).append(bold_file)
+            preproc_func.setdefault('movement', []).append(movement_file)
+            preproc_func.setdefault('TR', []).append(dataset.get('TR', np.nan))
+        preproc_func = pd.DataFrame(preproc_func)
 
-            functional.setdefault('study', []).append(study_id)
-            functional.setdefault('subject', []).append(subject_id)
-            functional.setdefault('model', []).append(model_id)
-            functional.setdefault('task', []).append(task_id)
-            functional.setdefault('task_name', []).append(dataset[task_id])            
-            functional.setdefault('run', []).append(run_id)
-            functional.setdefault('raw_bold', []).append(raw_bold_file)
-            functional.setdefault('preproc_bold', []).append(bold_file)
-            functional.setdefault('TR', []).append(dataset['TR'])
-            n_bold += 1
+        raw_func = {}
+        bold_files = join_subject('BOLD', '*', 'bold.nii.gz')
+        for bold_file in sorted(glob.glob(bold_files)):
+            session_id, _ = bold_file.split(os.path.sep)[-2:]
+            task_id, run_id = session_id.split('_')
+            raw_func.setdefault('study', []).append(study_id)
+            raw_func.setdefault('subject', []).append(subject_id)
+            raw_func.setdefault('task', []).append(task_id)
+            raw_func.setdefault('task_name', []).append(dataset.get(task_id, task_id))            
+            raw_func.setdefault('run', []).append(run_id)
+            raw_func.setdefault('raw_bold', []).append(bold_file)
+            raw_func.setdefault('TR', []).append(dataset.get('TR', np.nan))
+        raw_func = pd.DataFrame(raw_func)
 
-        if n_bold == 0:
-            bold_files = join_subject('BOLD', '*', 'bold.nii.gz')
-            for bold_file in sorted(glob.glob(bold_files)):
-                functional.setdefault('study', []).append(study_id)
-                functional.setdefault('subject', []).append(subject_id)
-                functional.setdefault('model', []).append(model_id)
-                functional.setdefault('task', []).append(task_id)
-                functional.setdefault('task_name', []).append(dataset[task_id])            
-                functional.setdefault('run', []).append(run_id)
-                functional.setdefault('raw_bold', []).append(bold_file)
-                functional.setdefault('preproc_bold', []).append(np.nan)
-                functional.setdefault('TR', []).append(dataset['TR'])
+        if raw_func.shape[0] == 0:
+            func = preproc_func
+        elif preproc_func.shape[0] == 0:
+            func = raw_func
+        else:  
+            func = preproc_func.merge(raw_func)
+        functional.append(func)
 
         # condition files
         cond_files = join_subject('model', '*', 'onsets', '*', '*.txt')
@@ -142,7 +172,7 @@ def _collect_openfmri_dataset(study_dir):
             conditions.setdefault('subject', []).append(subject_id)
             conditions.setdefault('model', []).append(model_id)
             conditions.setdefault('task', []).append(task_id)
-            conditions.setdefault('task_name', []).append(dataset[task_id])            
+            conditions.setdefault('task_name', []).append(dataset.get(task_id, task_id))            
             conditions.setdefault('run', []).append(run_id)
             conditions.setdefault('condition', []).append(cond_id)
             conditions.setdefault('condition_name', []).append(cond_name)
@@ -159,11 +189,12 @@ def _collect_openfmri_dataset(study_dir):
             contrasts.setdefault('dtype', []).append(dtype)
             contrasts.setdefault('contrast', []).append(contrast_id)
             
-    return (pd.DataFrame(structural), pd.DataFrame(functional),
+    return (pd.concat(structural, ignore_index=True),
+            pd.concat(functional, ignore_index=True),
             pd.DataFrame(conditions), pd.DataFrame(contrasts))
 
 
-def collect_openfmri(study_dirs, n_jobs=1):
+def collect_openfmri(study_dirs, memory=Memory(None), n_jobs=1):
     """Collect paths and identifiers of OpenfMRI datasets.
 
        Parameters
@@ -186,7 +217,8 @@ def collect_openfmri(study_dirs, n_jobs=1):
        Among those: motion.txt, orthogonalize.txt
     """
     datasets = Parallel(n_jobs=n_jobs, pre_dispatch='n_jobs')(
-        delayed(_collect_openfmri_dataset)(study_dir) for study_dir in study_dirs)
+        delayed(memory.cache(_collect_openfmri_dataset))(study_dir)
+        for study_dir in study_dirs)
     structural = pd.concat([d[0] for d in datasets], ignore_index=True)
     functional = pd.concat([d[1] for d in datasets], ignore_index=True)
     conditions = pd.concat([d[2] for d in datasets], ignore_index=True)
@@ -219,10 +251,13 @@ def fetch_glm_data(functional, conditions, hrf_model='canonical',
 
     return designs
 
+
 def fetch_classification_data(functional, conditions, n_jobs=1):
     """Returns data (almost) ready to be used for a
     classification of the timeseries.
     """
+    functional = functional.copy()
+    functional['movement'] = np.nan
     glm_data = fetch_glm_data(functional, conditions, hrf_model='canonical',
                              drift_model='blank', n_jobs=n_jobs)
     classif_data = {}
@@ -231,9 +266,11 @@ def fetch_classification_data(functional, conditions, n_jobs=1):
         classif_data[key]['bold'] = glm_data[key]['bold']
         classif_data[key]['target'] = []
         for dm in glm_data[key]['design']:
-            dm = dm.matrix[:, :-1]
+            cols = dm.columns.values
+            dm = dm.values[:, :-1]
             p = np.percentile(dm, 85)
-            classif_data[key]['target'].append((dm > p).astype('int'))
+            target = pd.DataFrame(dict(zip(cols, (dm > p).T.astype('int'))))
+            classif_data[key]['target'].append(target)
     return classif_data
 
 
@@ -243,12 +280,15 @@ def _make_design_matrix(run_frame, hrf_model='canonical', drift_model='cosine'):
     n_scans = nb.load(bold_file).shape[-1]
     tr = float(run_frame.TR.unique()[0])
     frametimes = np.linspace(0, (n_scans - 1) * tr, n_scans)
-
+    movement_regressors = run_frame.movement.unique()[0]
+    movement_regressors = np.recfromtxt(movement_regressors) \
+        if isinstance(movement_regressors, basestring) else None
+    
     names = []
     times = []
     durations = []
     amplitudes = []
-    for condition_id, condition_file in run_frame[['condition', 'condition_file']].values:
+    for condition_id, condition_name, condition_file in run_frame[['condition', 'condition_name', 'condition_file']].values:
         conditions = _csv_to_dict(condition_file)
         if condition_id == 'empty_evs':
             conditions = sorted(conditions.keys())
@@ -260,7 +300,7 @@ def _make_design_matrix(run_frame, hrf_model='canonical', drift_model='cosine'):
         else:
             keys = sorted(conditions.keys())
             times.append(np.array(keys).astype('float'))
-            names.append([condition_id] * len(keys))
+            names.append(['%s_%s' % (condition_id, condition_name)] * len(keys))
             durations.append([float(conditions[k][0]) for k in keys])
             amplitudes.append([float(conditions[k][1]) for k in keys])
 
@@ -276,29 +316,38 @@ def _make_design_matrix(run_frame, hrf_model='canonical', drift_model='cosine'):
     else:
         paradigm = BlockParadigm(names, times, durations, amplitudes)
 
-    design_matrix = make_dmtx(
-        frametimes, paradigm, hrf_model=hrf_model,
-        drift_model=drift_model)
+    if movement_regressors is None:
+        design_matrix = make_dmtx(
+            frametimes, paradigm, hrf_model=hrf_model,
+            drift_model=drift_model)
+    else:
+        mov_reg_names = ['movement_%i' % r
+                     for r in range(movement_regressors.shape[1])]
+        design_matrix = make_dmtx(
+            frametimes, paradigm, hrf_model=hrf_model,
+            drift_model=drift_model,
+            add_regs=movement_regressors, add_reg_names=mov_reg_names)
 
-    return bold_file, design_matrix
+    return bold_file, pd.DataFrame(dict(zip(design_matrix.names, design_matrix.matrix.T)))
 
 
 if __name__ == '__main__':
+    memory = Memory('/storage/workspace/yschwart/cache')
     base_dir = '/storage/workspace/yschwart/new_brainpedia'
 
     # glob preproc folders
     study_dirs = sorted(glob.glob(os.path.join(base_dir, 'preproc', '*')))
-    structural, functional, conditions, _ = collect_openfmri(study_dirs, n_jobs=-1)
+    structural, functional, conditions, _ = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
 
     # glob intra_stats folders to get contrasts
     study_dirs = sorted(glob.glob(os.path.join(base_dir, 'intra_stats', '*')))
-    _, _, _, contrasts = collect_openfmri(study_dirs, n_jobs=-1)
+    _, _, _, contrasts = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
 
     # we can merge dataframes!
     df = functional.merge(conditions)
 
     # we can filter the dataframes!
-    functional = functional[functional.study == 'HCP']
+    functional = functional[functional.study == 'pinel2007fast']
 
     # computes design matrices for the given dataframes
     designs = fetch_glm_data(functional, conditions, n_jobs=-1)
