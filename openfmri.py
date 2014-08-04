@@ -188,8 +188,10 @@ def _collect_openfmri_dataset(study_dir):
             contrasts.setdefault('model', []).append(model_id)
             contrasts.setdefault('dtype', []).append(dtype)
             contrasts.setdefault('contrast', []).append(contrast_id)
-            
-    return (pd.concat(structural, ignore_index=True),
+            contrasts.setdefault('contrast_file', []).append(contrast_file)
+
+    return (dataset, model,
+            pd.concat(structural, ignore_index=True),
             pd.concat(functional, ignore_index=True),
             pd.DataFrame(conditions), pd.DataFrame(contrasts))
 
@@ -216,17 +218,26 @@ def collect_openfmri(study_dirs, memory=Memory(None), n_jobs=1):
        All the files from the openfmri structure are not yet collected.
        Among those: motion.txt, orthogonalize.txt
     """
-    datasets = Parallel(n_jobs=n_jobs, pre_dispatch='n_jobs')(
+    results = Parallel(n_jobs=n_jobs, pre_dispatch='n_jobs')(
         delayed(memory.cache(_collect_openfmri_dataset))(study_dir)
         for study_dir in study_dirs)
-    structural = pd.concat([d[0] for d in datasets], ignore_index=True)
-    functional = pd.concat([d[1] for d in datasets], ignore_index=True)
-    conditions = pd.concat([d[2] for d in datasets], ignore_index=True)
-    contrasts = pd.concat([d[3] for d in datasets], ignore_index=True)
-    return structural, functional, conditions, contrasts
+    datasets = [r[0] for r in results]
+    models = [r[1] for r in results]
+    structural = pd.concat([r[2] for r in results], ignore_index=True)
+    functional = pd.concat([r[3] for r in results], ignore_index=True)
+    conditions = pd.concat([r[4] for r in results], ignore_index=True)
+    contrasts = pd.concat([r[5] for r in results], ignore_index=True)
+
+    # merge datasets and models
+    datasets_ = {}
+    for dataset, model in zip(datasets, models):
+        dataset['models'] = model
+        datasets_[dataset['study_id']] = dataset
+
+    return datasets_, structural, functional, conditions, contrasts
 
 
-def fetch_glm_data(functional, conditions, hrf_model='canonical',
+def fetch_glm_data(datasets, functional, conditions, hrf_model='canonical',
                    drift_model='cosine', n_jobs=1):
     """Returns data (almost) ready to be used for a GLM.
     """
@@ -244,13 +255,48 @@ def fetch_glm_data(functional, conditions, hrf_model='canonical',
     print 'Collecting...'
     designs = {}
     for group_id, group_df in main.groupby(['study', 'subject', 'model']):
-        for run_id, run_df in group_df.groupby(['task', 'run']):
+        study_id, subject_id, model_id = group_id
+        for session_id, run_df in group_df.groupby(['task', 'run']):
+            task_id, run_id = session_id
             bold_file, dm = results.pop(0)        
             designs.setdefault(group_id, {}).setdefault('bold', []).append(bold_file)
             designs.setdefault(group_id, {}).setdefault('design', []).append(dm)
-
+        designs.setdefault(group_id, {}).setdefault(
+            model_id, _make_contrasts(datasets, study_id, model_id, hrf_model, group_df))
+        designs.setdefault(group_id, {}).setdefault(
+            '%s_per_run' % model_id, _make_contrasts(
+                datasets, study_id, model_id, hrf_model, group_df, per_run=True))
     return designs
 
+
+def _make_contrasts(datasets, study_id, model_id, hrf_model, group_df, per_run=False):
+    contrasts = {}
+    model_contrasts = datasets[study_id]['models'][model_id]['contrasts']
+    if per_run:
+        model_contrasts_ = {}
+        for session_id, run_df in group_df.groupby(['task', 'run']):
+            task_id, run_id = session_id
+            for con_id in model_contrasts:
+                new_con_id = '%s_%s_%s' % (
+                    con_id.split('_', 1)[0], run_id, con_id.split('_', 1)[1])
+                model_contrasts_[new_con_id] = model_contrasts[con_id]
+        model_contrasts = model_contrasts_
+
+    for session_id, run_df in group_df.groupby(['task', 'run']):
+        task_id, run_id = session_id
+
+        for con_id in model_contrasts:
+            con_val = model_contrasts[con_id]
+            con_val = np.array(con_val).astype(np.float)
+            if 'derivative' in hrf_model:
+                con_val = np.insert(con_val, np.arange(con_val.size) + 1, 0).tolist()
+            if (not con_id.startswith(task_id) and not per_run) or (
+                (not con_id.startswith(task_id) or not run_id in con_id) and per_run):
+                con_val = None
+            contrasts.setdefault(con_id, []).append(con_val)
+
+    return contrasts
+    
 
 def fetch_classification_data(functional, conditions, n_jobs=1):
     """Returns data (almost) ready to be used for a
@@ -275,7 +321,7 @@ def fetch_classification_data(functional, conditions, n_jobs=1):
 
 
 def _make_design_matrix(run_frame, hrf_model='canonical', drift_model='cosine'):
-    print ' %s' % ' '.join(run_frame[['study', 'subject', 'model', 'task', 'run']].values[0])
+    # print ' %s' % ' '.join(run_frame[['study', 'subject', 'model', 'task', 'run']].values[0])
     bold_file = run_frame.preproc_bold.unique()[0]
     n_scans = nb.load(bold_file).shape[-1]
     tr = float(run_frame.TR.unique()[0])
@@ -337,20 +383,21 @@ if __name__ == '__main__':
 
     # glob preproc folders
     study_dirs = sorted(glob.glob(os.path.join(base_dir, 'preproc', '*')))
-    structural, functional, conditions, _ = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
+    datasets, structural, functional, conditions, _ = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
 
     # glob intra_stats folders to get contrasts
     study_dirs = sorted(glob.glob(os.path.join(base_dir, 'intra_stats', '*')))
-    _, _, _, contrasts = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
+    _, _, _, _, contrasts = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
 
     # we can merge dataframes!
     df = functional.merge(conditions)
 
     # we can filter the dataframes!
-    functional = functional[functional.study == 'pinel2007fast']
+    functional = functional[functional.study == 'amalric2012mathematicians']
 
     # computes design matrices for the given dataframes
-    designs = fetch_glm_data(functional, conditions, n_jobs=-1)
+    designs = fetch_glm_data(datasets, functional, conditions, n_jobs=-1)
+    designs = fetch_glm_data(datasets, functional, conditions, hrf_model='canonical with derivative', n_jobs=-1)
 
     # computes classification targets for the given dataframes
     classif = fetch_classification_data(functional, conditions, n_jobs=-1)
