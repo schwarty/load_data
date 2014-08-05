@@ -50,7 +50,7 @@ def _csv_to_dict(path, key_end_pos=1, join_values=False, delimiter=' ', quotecha
     return dict(data)
     
 
-def _collect_openfmri_dataset(study_dir):
+def _collect_openfmri_dataset(study_dir, img_ext='nii.gz'):
     # parse study-level metadata files
     dataset = {}
     join_study = partial(os.path.join, study_dir)
@@ -94,7 +94,7 @@ def _collect_openfmri_dataset(study_dir):
 
         # Anatomy data
         preproc_anat = {}
-        anat_files = join_subject('model', '*', 'anatomy', 'highres001.nii.gz')
+        anat_files = join_subject('model', '*', 'anatomy', 'highres001.%s' % img_ext)
         for anat_file in sorted(glob.glob(anat_files)):
             model_id, _, _ = anat_file.split(os.path.sep)[-3:]
             preproc_anat.setdefault('study', []).append(study_id)
@@ -104,7 +104,7 @@ def _collect_openfmri_dataset(study_dir):
         preproc_anat = pd.DataFrame(preproc_anat)
 
         raw_anat = {}
-        anat_file = join_subject('anatomy', 'highres001.nii.gz')
+        anat_file = join_subject('anatomy', 'highres001.%s' % img_ext)
         anat_file = anat_file if os.path.exists(anat_file) else np.nan
         raw_anat.setdefault('study', []).append(study_id)
         raw_anat.setdefault('subject', []).append(subject_id)
@@ -121,7 +121,7 @@ def _collect_openfmri_dataset(study_dir):
 
         # BOLD data
         preproc_func = {}
-        bold_files = join_subject('model', '*', 'BOLD', '*', 'bold.nii.gz')
+        bold_files = join_subject('model', '*', 'BOLD', '*', 'bold.%s' % img_ext)
         for bold_file in sorted(glob.glob(bold_files)):
             model_id, _, session_id, _ = bold_file.split(os.path.sep)[-4:]
             task_id, run_id = session_id.split('_')
@@ -139,7 +139,7 @@ def _collect_openfmri_dataset(study_dir):
         preproc_func = pd.DataFrame(preproc_func)
 
         raw_func = {}
-        bold_files = join_subject('BOLD', '*', 'bold.nii.gz')
+        bold_files = join_subject('BOLD', '*', 'bold.%s' % img_ext)
         for bold_file in sorted(glob.glob(bold_files)):
             session_id, _ = bold_file.split(os.path.sep)[-2:]
             task_id, run_id = session_id.split('_')
@@ -179,10 +179,10 @@ def _collect_openfmri_dataset(study_dir):
             conditions.setdefault('condition_file', []).append(cond_file)
 
         # contrast files
-        contrast_files = join_subject('model', '*', '*_maps', '*.nii.gz')
+        contrast_files = join_subject('model', '*', '*_maps', '*.%s' % img_ext)
         for contrast_file in sorted(glob.glob(contrast_files)):
             model_id, dtype, contrast_id = contrast_file.split(os.path.sep)[-3:]
-            contrast_id = contrast_id.split('.nii.gz')[0]
+            contrast_id = contrast_id.split('.%s' % img_ext)[0]
             contrasts.setdefault('study', []).append(study_id)
             contrasts.setdefault('subject', []).append(subject_id)
             contrasts.setdefault('model', []).append(model_id)
@@ -196,7 +196,7 @@ def _collect_openfmri_dataset(study_dir):
             pd.DataFrame(conditions), pd.DataFrame(contrasts))
 
 
-def collect_openfmri(study_dirs, memory=Memory(None), n_jobs=1):
+def collect_openfmri(study_dirs, memory=Memory(None), img_ext='nii.gz', n_jobs=1):
     """Collect paths and identifiers of OpenfMRI datasets.
 
        Parameters
@@ -219,7 +219,7 @@ def collect_openfmri(study_dirs, memory=Memory(None), n_jobs=1):
        Among those: motion.txt, orthogonalize.txt
     """
     results = Parallel(n_jobs=n_jobs, pre_dispatch='n_jobs')(
-        delayed(memory.cache(_collect_openfmri_dataset))(study_dir)
+        delayed(memory.cache(_collect_openfmri_dataset))(study_dir, img_ext=img_ext)
         for study_dir in study_dirs)
     datasets = [r[0] for r in results]
     models = [r[1] for r in results]
