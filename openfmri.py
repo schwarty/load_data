@@ -279,7 +279,8 @@ def _make_contrasts(datasets, study_id, model_id, hrf_model, group_df, per_run=F
             for con_id in model_contrasts:
                 new_con_id = '%s_%s_%s' % (
                     con_id.split('_', 1)[0], run_id, con_id.split('_', 1)[1])
-                model_contrasts_[new_con_id] = model_contrasts[con_id]
+                if new_con_id.startswith(task_id):
+                    model_contrasts_[new_con_id] = model_contrasts[con_id]
         model_contrasts = model_contrasts_
 
     for session_id, run_df in group_df.groupby(['task', 'run']):
@@ -298,13 +299,13 @@ def _make_contrasts(datasets, study_id, model_id, hrf_model, group_df, per_run=F
     return contrasts
     
 
-def fetch_classification_data(functional, conditions, n_jobs=1):
+def fetch_classification_data(datasets, functional, conditions, n_jobs=1):
     """Returns data (almost) ready to be used for a
     classification of the timeseries.
     """
     functional = functional.copy()
     functional['movement'] = np.nan
-    glm_data = fetch_glm_data(functional, conditions, hrf_model='canonical',
+    glm_data = fetch_glm_data(datasets, functional, conditions, hrf_model='canonical',
                              drift_model='blank', n_jobs=n_jobs)
     classif_data = {}
     for key in glm_data:
@@ -400,4 +401,4 @@ if __name__ == '__main__':
     designs = fetch_glm_data(datasets, functional, conditions, hrf_model='canonical with derivative', n_jobs=-1)
 
     # computes classification targets for the given dataframes
-    classif = fetch_classification_data(functional, conditions, n_jobs=-1)
+    classif = fetch_classification_data(datasets, functional, conditions, n_jobs=-1)
