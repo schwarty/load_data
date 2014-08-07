@@ -196,7 +196,7 @@ def _collect_openfmri_dataset(study_dir, img_ext='nii.gz'):
             pd.DataFrame(conditions), pd.DataFrame(contrasts))
 
 
-def collect_openfmri(study_dirs, memory=Memory(None), img_ext='nii.gz', n_jobs=1):
+def collect_openfmri(study_dirs, img_ext='nii.gz', memory=Memory(None), n_jobs=1):
     """Collect paths and identifiers of OpenfMRI datasets.
 
        Parameters
@@ -237,16 +237,19 @@ def collect_openfmri(study_dirs, memory=Memory(None), img_ext='nii.gz', n_jobs=1
     return datasets_, structural, functional, conditions, contrasts
 
 
-def fetch_glm_data(datasets, functional, conditions, hrf_model='canonical',
-                   drift_model='cosine', n_jobs=1):
+def load_glm_inputs(study_dirs, hrf_model='canonical', drift_model='cosine',
+                    img_ext='nii.gz', memory=Memory(None), n_jobs=1):
     """Returns data (almost) ready to be used for a GLM.
     """
+    datasets, structural, functional, conditions, contrasts = \
+        collect_openfmri(study_dirs, img_ext=img_ext, memory=memory, n_jobs=n_jobs)
+
     main = functional.merge(conditions)
 
     # computing design matrices
     print 'Computing models...'
     results = Parallel(n_jobs=n_jobs, pre_dispatch='n_jobs')(
-        delayed(_make_design_matrix)(run_df, hrf_model, drift_model)
+        delayed(memory.cache(_make_design_matrix))(run_df, hrf_model, drift_model)
         for group_id, group_df in main.groupby(['study', 'subject', 'model'])
         for run_id, run_df in group_df.groupby(['task', 'run'])
         )
@@ -299,26 +302,29 @@ def _make_contrasts(datasets, study_id, model_id, hrf_model, group_df, per_run=F
     return contrasts
     
 
-def fetch_classification_data(datasets, functional, conditions, n_jobs=1):
+def load_classification_inputs(study_dirs, img_ext='nii.gz', memory=Memory(None), n_jobs=1):
     """Returns data (almost) ready to be used for a
     classification of the timeseries.
     """
-    functional = functional.copy()
-    functional['movement'] = np.nan
-    glm_data = fetch_glm_data(datasets, functional, conditions, hrf_model='canonical',
-                             drift_model='blank', n_jobs=n_jobs)
-    classif_data = {}
-    for key in glm_data:
-        classif_data[key] = {}
-        classif_data[key]['bold'] = glm_data[key]['bold']
-        classif_data[key]['target'] = []
-        for dm in glm_data[key]['design']:
+    # datasets, structural, functional, conditions, contrasts = \
+    #     collect_openfmri(study_dirs, img_ext=img_ext, memory=memory, n_jobs=n_jobs)
+
+    # functional['movement'] = np.nan
+    glm_inputs = load_glm_inputs(study_dirs, hrf_model='canonical', drift_model='blank',
+                               img_ext=img_ext, memory=memory, n_jobs=n_jobs)
+    classif_inputs = {}
+    for key in glm_inputs:
+        classif_inputs[key] = {}
+        classif_inputs[key]['bold'] = glm_inputs[key]['bold']
+        classif_inputs[key]['target'] = []
+        for dm in glm_inputs[key]['design']:
             cols = dm.columns.values
-            dm = dm.values[:, :-1]
+            cols = [col for col in cols if 'movement' not in col and 'constant' not in col]
+            dm = dm[cols].values
             p = np.percentile(dm, 85)
             target = pd.DataFrame(dict(zip(cols, (dm > p).T.astype('int'))))
-            classif_data[key]['target'].append(target)
-    return classif_data
+            classif_inputs[key]['target'].append(target)
+    return classif_inputs
 
 
 def _make_design_matrix(run_frame, hrf_model='canonical', drift_model='cosine'):
@@ -382,13 +388,13 @@ if __name__ == '__main__':
     memory = Memory('/storage/workspace/yschwart/cache')
     base_dir = '/storage/workspace/yschwart/new_brainpedia'
 
-    # glob preproc folders
-    study_dirs = sorted(glob.glob(os.path.join(base_dir, 'preproc', '*')))
-    datasets, structural, functional, conditions, _ = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
-
     # glob intra_stats folders to get contrasts
     study_dirs = sorted(glob.glob(os.path.join(base_dir, 'intra_stats', '*')))
     _, _, _, _, contrasts = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
+
+    # glob preproc folders
+    study_dirs = sorted(glob.glob(os.path.join(base_dir, 'preproc', '*')))
+    datasets, structural, functional, conditions, _ = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
 
     # we can merge dataframes!
     df = functional.merge(conditions)
@@ -397,8 +403,8 @@ if __name__ == '__main__':
     functional = functional[functional.study == 'amalric2012mathematicians']
 
     # computes design matrices for the given dataframes
-    glm_inputs = fetch_glm_data(datasets, functional, conditions, n_jobs=-1)
-    glm_inputs = fetch_glm_data(datasets, functional, conditions, hrf_model='canonical with derivative', n_jobs=-1)
+    glm_inputs = load_glm_inputs(study_dirs, memory=memory, n_jobs=-1)
+    glm_inputs = load_glm_inputs(study_dirs, hrf_model='canonical with derivative', memory=memory, n_jobs=-1)
 
     # computes classification targets for the given dataframes
-    classif = fetch_classification_data(datasets, functional, conditions, n_jobs=-1)
+    classif_inputs = load_classification_inputs(study_dirs, memory=memory, n_jobs=-1)
