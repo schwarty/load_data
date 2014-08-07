@@ -253,20 +253,20 @@ def fetch_glm_data(datasets, functional, conditions, hrf_model='canonical',
 
     # collect results
     print 'Collecting...'
-    designs = {}
+    glm_inputs = {}
     for group_id, group_df in main.groupby(['study', 'subject', 'model']):
         study_id, subject_id, model_id = group_id
         for session_id, run_df in group_df.groupby(['task', 'run']):
             task_id, run_id = session_id
             bold_file, dm = results.pop(0)        
-            designs.setdefault(group_id, {}).setdefault('bold', []).append(bold_file)
-            designs.setdefault(group_id, {}).setdefault('design', []).append(dm)
-        designs.setdefault(group_id, {}).setdefault(
+            glm_inputs.setdefault(group_id, {}).setdefault('bold', []).append(bold_file)
+            glm_inputs.setdefault(group_id, {}).setdefault('design', []).append(dm)
+        glm_inputs.setdefault(group_id, {}).setdefault(
             model_id, _make_contrasts(datasets, study_id, model_id, hrf_model, group_df))
-        designs.setdefault(group_id, {}).setdefault(
+        glm_inputs.setdefault(group_id, {}).setdefault(
             '%s_per_run' % model_id, _make_contrasts(
                 datasets, study_id, model_id, hrf_model, group_df, per_run=True))
-    return designs
+    return glm_inputs
 
 
 def _make_contrasts(datasets, study_id, model_id, hrf_model, group_df, per_run=False):
@@ -397,8 +397,8 @@ if __name__ == '__main__':
     functional = functional[functional.study == 'amalric2012mathematicians']
 
     # computes design matrices for the given dataframes
-    designs = fetch_glm_data(datasets, functional, conditions, n_jobs=-1)
-    designs = fetch_glm_data(datasets, functional, conditions, hrf_model='canonical with derivative', n_jobs=-1)
+    glm_inputs = fetch_glm_data(datasets, functional, conditions, n_jobs=-1)
+    glm_inputs = fetch_glm_data(datasets, functional, conditions, hrf_model='canonical with derivative', n_jobs=-1)
 
     # computes classification targets for the given dataframes
     classif = fetch_classification_data(datasets, functional, conditions, n_jobs=-1)
