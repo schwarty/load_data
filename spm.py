@@ -156,7 +156,7 @@ def load_design_matrix(mat_file, design_format='nipy', memory=default_memory):
         dm_vmasked = np.vsplit(design_matrix, np.cumsum(n_scans[:-1]))
         for mask, dm in zip(session_masking, dm_vmasked):
             # mask the session matrices with their regressors only
-            dm_hmasked = pd.DataFrame(dict(zip(condition_names[mask], dm[:, mask])))
+            dm_hmasked = pd.DataFrame(dict(zip(condition_names[mask], dm[:, mask].T)))
             design_matrices.append(dm_hmasked)
         return design_matrices
     
