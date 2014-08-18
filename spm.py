@@ -222,7 +222,13 @@ def _parallel_load_glm_inputs(mat_file, smoothed_bold=False, design_format='nipy
     else:
         contrasts_ = dict(zip(contrasts.index, contrasts.values))
 
-    glm_inputs['model001'] = contrasts_
+    # remove 2d contrasts
+    contrasts = {}
+    for c in contrasts_:
+        if np.array(contrasts_[c]).ndim != 3:
+            contrasts[c] = contrasts_[c]
+
+    glm_inputs['model001'] = contrasts
 
     return glm_inputs
 
