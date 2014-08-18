@@ -218,6 +218,9 @@ def collect_openfmri(study_dirs, img_ext='nii.gz', memory=Memory(None), n_jobs=1
        All the files from the openfmri structure are not yet collected.
        Among those: motion.txt, orthogonalize.txt
     """
+    if isinstance(study_dirs, basestring):
+        study_dirs = glob.glob(study_dirs)
+
     results = Parallel(n_jobs=n_jobs, pre_dispatch='n_jobs')(
         delayed(memory.cache(_collect_openfmri_dataset))(study_dir, img_ext=img_ext)
         for study_dir in study_dirs)
@@ -381,6 +384,18 @@ def _make_design_matrix(run_frame, hrf_model='canonical', drift_model='cosine'):
             drift_model=drift_model,
             add_regs=movement_regressors, add_reg_names=mov_reg_names)
 
+    if orthogonalize is not None:
+        if 'derivative' in hrf_model:
+            raise Exception(
+                'Orthogonalization not supported with hrf derivative.')
+        orth = orthogonalize[i]
+        if orth is not None:
+            for x, y in orth:
+                x_ = design_matrix.matrix[:, x]
+                y_ = design_matrix.matrix[:, y]
+                z = orthogonalize_vectors(x_, y_)
+                design_matrix.matrix[:, x] = z
+
     return bold_file, pd.DataFrame(dict(zip(design_matrix.names, design_matrix.matrix.T)))
 
 
@@ -389,11 +404,11 @@ if __name__ == '__main__':
     base_dir = '/storage/workspace/yschwart/new_brainpedia'
 
     # glob intra_stats folders to get contrasts
-    study_dirs = sorted(glob.glob(os.path.join(base_dir, 'intra_stats', '*')))
+    study_dirs = sorted(glob.glob(os.path.join(base_dir, 'intra_stats', 'ds017B')))
     _, _, _, _, contrasts = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
 
     # glob preproc folders
-    study_dirs = sorted(glob.glob(os.path.join(base_dir, 'preproc', '*')))
+    study_dirs = sorted(glob.glob(os.path.join(base_dir, 'preproc', 'ds017B')))
     datasets, structural, functional, conditions, _ = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
 
     # we can merge dataframes!
