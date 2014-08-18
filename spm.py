@@ -219,10 +219,10 @@ def _parallel_load_glm_inputs(mat_file, smoothed_bold=False, design_format='nipy
         for sess in contrasts:
             for c, cval in zip(sess.index, sess.values):
                 contrasts_.setdefault(c, []).append(cval.tolist())
-        glm_inputs.setdefault(mat_file, {})['model001'] = contrasts_
     else:
-        glm_inputs.setdefault(mat_file, {})['model001'] = \
-            dict(zip(contrasts.index, contrasts.values))
+        contrasts_ = dict(zip(contrasts.index, contrasts.values))
+
+    glm_inputs['model001'] = contrasts_
 
     return glm_inputs
 
