@@ -23,7 +23,8 @@ def load_matfile(mat_file):
     return mat_file
 
 
-def load_conditions_onsets(mat_file, session_names=None, condition_names=None, memory=default_memory):
+def load_conditions_onsets(mat_file, session_names=None,
+                           condition_names=None, memory=default_memory):
     matfile = memory.cache(load_matfile)(mat_file)['SPM']
     session_names = dict() if session_names is None else session_names
     condition_names = dict() if condition_names is None else condition_names
@@ -114,18 +115,24 @@ def get_task_contrasts(mat_file, contrast_names=None,
         condition_values = c.c
 
         if design_format == 'nipy':
-            session_masking = _mask_session_design_matrix(condition_names, n_sessions)
+            session_masking = _mask_session_design_matrix(condition_names,
+                                                          n_sessions)
             for i, mask in enumerate(session_masking):
-                contrasts.setdefault(i, {}).setdefault('index', []).append(contrast_id)
-                for condition_id, cond_val in zip(condition_names[mask], condition_values[mask]):
-                    contrasts.setdefault(i, {}).setdefault(condition_id, []).append(cond_val)
+                contrasts.setdefault(i, {}).setdefault(
+                    'index', []).append(contrast_id)
+                for condition_id, cond_val in zip(condition_names[mask],
+                                                  condition_values[mask]):
+                    contrasts.setdefault(i, {}).setdefault(
+                        condition_id, []).append(cond_val)
         else:
             contrasts.setdefault('index', []).append(contrast_id)
-            for condition_id, cond_val in zip(condition_names, condition_values):
+            for condition_id, cond_val in zip(condition_names,
+                                              condition_values):
                 contrasts.setdefault(condition_id, []).append(cond_val)
 
     if design_format == 'nipy':
-        contrasts = [pd.DataFrame(c, index=c.pop('index')) for c in contrasts.values()]
+        contrasts = [pd.DataFrame(c, index=c.pop('index'))
+                     for c in contrasts.values()]
     else:
         contrasts = pd.DataFrame(contrasts, index=contrasts.pop('index'))
 
@@ -155,15 +162,17 @@ def load_design_matrix(mat_file, design_format='nipy', memory=default_memory):
 
     if design_format == 'nipy':  # slicing design matrix per session
         design_matrices = []
-        session_masking = _mask_session_design_matrix(condition_names, n_sessions)
+        session_masking = _mask_session_design_matrix(
+            condition_names, n_sessions)
         # split design matrix on the timepoint axis per session
         dm_vmasked = np.vsplit(design_matrix, np.cumsum(n_scans[:-1]))
         for mask, dm in zip(session_masking, dm_vmasked):
             # mask the session matrices with their regressors only
-            dm_hmasked = pd.DataFrame(dict(zip(condition_names[mask], dm[:, mask].T)))
+            dm_hmasked = pd.DataFrame(
+                dict(zip(condition_names[mask], dm[:, mask].T)))
             design_matrices.append(dm_hmasked)
         return design_matrices
-    
+
     else:  # plain design matrix
         return pd.DataFrame(dict(zip(condition_names, design_matrix)))
 
@@ -174,7 +183,7 @@ def get_bold_timeseries(mat_file, smoothed=False, memory=default_memory):
 
     # bold timeseries paths
     timeseries = [_check_bold_path(p, mat_file) for p in matfile.xY.P]
-    
+
     # remove the s from swa to get non-smoothed data
     if not smoothed:
         _timeseries = []
@@ -206,15 +215,16 @@ def load_glm_inputs(mat_files, smoothed_bold=False, contrast_names=None,
     return dict(zip(mat_files, glm_inputs))
 
 
-def _parallel_load_glm_inputs(mat_file, smoothed_bold=False, contrast_names=None,
-                              design_format='nipy', memory=default_memory):
+def _parallel_load_glm_inputs(mat_file, smoothed_bold=False,
+                              contrast_names=None, design_format='nipy',
+                              memory=default_memory):
 
     glm_inputs = {}
 
     design_matrix = load_design_matrix(mat_file, design_format)
-    stat_images, contrasts = get_task_contrasts(mat_file, contrast_names, design_format)
+    stat_images, contrasts = get_task_contrasts(mat_file, contrast_names,
+                                                design_format)
     bold = get_bold_timeseries(mat_file, smoothed=smoothed_bold)
-
 
     glm_inputs['design'] = design_matrix
     glm_inputs['bold'] = bold
@@ -245,7 +255,8 @@ def _parallel_load_glm_inputs(mat_file, smoothed_bold=False, contrast_names=None
             for c in contrasts:
                 n_runs = np.array(contrasts[c]).shape[0]
                 for run_id in range(n_runs):
-                    contrast_id = '%s_run%03i_%s' % (task_id, run_id + 1, c.split('_', 1)[1])
+                    contrast_id = '%s_run%03i_%s' % (
+                        task_id, run_id + 1, c.split('_', 1)[1])
                     run_indices = np.ones(n_runs, dtype=np.bool)
                     run_indices[run_id] = False
                     run_indices = np.where(run_indices)[0]
@@ -284,9 +295,12 @@ def _check_bold_path(path, up_to_date_path=None):
         up_to_date_path = os.path.realpath(up_to_date_path)
         path_chunks = np.array(path.split('/'))
         up_to_date_path_chunks = np.array(up_to_date_path.split('/'))
-        pivot = up_to_date_path_chunks[np.in1d(up_to_date_path_chunks, path_chunks)][-1]
+        pivot = up_to_date_path_chunks[np.in1d(
+            up_to_date_path_chunks, path_chunks)][-1]
         root = up_to_date_path.split(pivot)[0]
-        leaf = path.split(pivot)[1].strip('/')
+        leaf = os.path.join(
+            os.path.split(path)[0].split(pivot)[1].strip('/'),
+            os.path.split(path)[1])
         path = os.path.join(root, pivot, leaf)
 
     return path
