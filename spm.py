@@ -12,10 +12,12 @@ from scipy.io import loadmat
 from joblib import Memory, Parallel, delayed
 
 
-default_memory = Memory(tempfile.gettempdir())
+default_memory = Memory(None)
 
 
 def load_matfile(mat_file):
+    """Load a matfile or gzipped matfile with the right arguments
+    """
     if isinstance(mat_file, (str, unicode)):
         if mat_file.endswith('.gz'):
             mat_file = gzip.open(mat_file, 'rb')
@@ -25,6 +27,31 @@ def load_matfile(mat_file):
 
 def load_conditions_onsets(mat_file, session_names=None,
                            condition_names=None, memory=default_memory):
+    """Load conditions onsets
+
+       Parameters
+       ----------
+       mat_file: str
+           matfile location
+       session_names: dict or None (optional)
+           alternative session names, with sessions id as integers
+           for the keys, and sessions names as str for the values.
+           e.g., {1: 'session_one', 2: 'session_two'}
+       condition_names: dict or None (optional)
+           alternative condition names, with tuple of integers
+           corresponding to the session_id and condition_id as keys.
+           e.g., {(1, 1): 'session001_cond001_task',
+                  (1, 2): 'session001_cond002_control'}
+       memory: Memory (optional)
+           joblib memory
+
+       Returns
+       -------
+       conditions: DataFrame
+           one line per event and the following columns:
+           session_id, session_name, condition_id, condition_name,
+           condition_default_name, onset, duration, amplitude
+    """
     matfile = memory.cache(load_matfile)(mat_file)['SPM']
     session_names = dict() if session_names is None else session_names
     condition_names = dict() if condition_names is None else condition_names
@@ -69,6 +96,8 @@ def load_conditions_onsets(mat_file, session_names=None,
 
 def save_conditions_onsets(conditions_onsets,
                            onsets_dir=tempfile.gettempdir()):
+    """Save a DataFrame given by get_conditions_onsets to disk.
+    """
     condition_files = []
 
     for cid, cframe in conditions_onsets.groupby(['session_name',
