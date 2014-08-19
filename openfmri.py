@@ -82,6 +82,11 @@ def _collect_openfmri_dataset(study_dir, img_ext='nii.gz'):
             model[model_id]['contrasts'] = _csv_to_dict(
                 join_model('task_contrasts.txt'), key_end_pos=2)
 
+        model[model_id]['orthogonalize'] = None
+        if exists(join_model('orthogonalize.txt')):
+            model[model_id]['orthogonalize'] = pd.DataFrame.from_csv(
+                join_model('orthogonalize.txt'), header=-1, sep=' ')
+            
     # parse subject-level files and align it with study and model
     structural = []
     functional = []
@@ -252,7 +257,8 @@ def load_glm_inputs(study_dirs, hrf_model='canonical', drift_model='cosine',
     # computing design matrices
     print 'Computing models...'
     results = Parallel(n_jobs=n_jobs, pre_dispatch='n_jobs')(
-        delayed(memory.cache(_make_design_matrix))(run_df, hrf_model, drift_model)
+        delayed(memory.cache(_make_design_matrix))(
+            run_df, hrf_model, drift_model, orthogonalize=datasets[group_id[0]]['models'][group_id[2]]['orthogonalize'])
         for group_id, group_df in main.groupby(['study', 'subject', 'model'])
         for run_id, run_df in group_df.groupby(['task', 'run'])
         )
@@ -330,7 +336,7 @@ def load_classification_inputs(study_dirs, img_ext='nii.gz', memory=Memory(None)
     return classif_inputs
 
 
-def _make_design_matrix(run_frame, hrf_model='canonical', drift_model='cosine'):
+def _make_design_matrix(run_frame, hrf_model='canonical', drift_model='cosine', orthogonalize=None):
     # print ' %s' % ' '.join(run_frame[['study', 'subject', 'model', 'task', 'run']].values[0])
     bold_file = run_frame.preproc_bold.unique()[0]
     n_scans = nb.load(bold_file).shape[-1]
@@ -339,7 +345,6 @@ def _make_design_matrix(run_frame, hrf_model='canonical', drift_model='cosine'):
     movement_regressors = run_frame.movement.unique()[0]
     movement_regressors = np.recfromtxt(movement_regressors) \
         if isinstance(movement_regressors, basestring) else None
-    
     names = []
     times = []
     durations = []
@@ -384,19 +389,26 @@ def _make_design_matrix(run_frame, hrf_model='canonical', drift_model='cosine'):
             drift_model=drift_model,
             add_regs=movement_regressors, add_reg_names=mov_reg_names)
 
-    if orthogonalize is not None:
-        if 'derivative' in hrf_model:
-            raise Exception(
-                'Orthogonalization not supported with hrf derivative.')
-        orth = orthogonalize[i]
-        if orth is not None:
-            for x, y in orth:
-                x_ = design_matrix.matrix[:, x]
-                y_ = design_matrix.matrix[:, y]
-                z = orthogonalize_vectors(x_, y_)
-                design_matrix.matrix[:, x] = z
+    # orthogonalize regressors
+    if orthogonalize is not None and not 'derivative' in hrf_model:
+        task_id = run_frame.task.unique()[0]
+
+        for x, y in orthogonalize[orthogonalize.index == task_id].values:
+            x_ = design_matrix.matrix[:, x]
+            y_ = design_matrix.matrix[:, y]
+            z = _orthogonalize_vectors(x_, y_)
+            design_matrix.matrix[:, x] = z
 
     return bold_file, pd.DataFrame(dict(zip(design_matrix.names, design_matrix.matrix.T)))
+
+
+def _orthogonalize_vectors(x, y):
+    x = np.array(x)
+    y = np.array(y)
+
+    s = np.dot(x, y) / np.sum(y ** 2)
+
+    return (x - y * s)
 
 
 if __name__ == '__main__':
@@ -404,21 +416,21 @@ if __name__ == '__main__':
     base_dir = '/storage/workspace/yschwart/new_brainpedia'
 
     # glob intra_stats folders to get contrasts
-    study_dirs = sorted(glob.glob(os.path.join(base_dir, 'intra_stats', 'ds017B')))
+    study_dirs = sorted(glob.glob(os.path.join(base_dir, 'intra_stats', 'ds001')))
     _, _, _, _, contrasts = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
 
     # glob preproc folders
-    study_dirs = sorted(glob.glob(os.path.join(base_dir, 'preproc', 'ds017B')))
+    study_dirs = sorted(glob.glob(os.path.join(base_dir, 'preproc', 'ds001')))
     datasets, structural, functional, conditions, _ = collect_openfmri(study_dirs, memory=memory, n_jobs=-1)
 
     # we can merge dataframes!
     df = functional.merge(conditions)
 
     # we can filter the dataframes!
-    functional = functional[functional.study == 'amalric2012mathematicians']
+    functional = functional[functional.study == 'ds001']
 
     # computes design matrices for the given dataframes
-    glm_inputs = load_glm_inputs(study_dirs, memory=memory, n_jobs=-1)
+    glm_inputs = load_glm_inputs(study_dirs, memory=memory, n_jobs=1)
     glm_inputs = load_glm_inputs(study_dirs, hrf_model='canonical with derivative', memory=memory, n_jobs=-1)
 
     # computes classification targets for the given dataframes
