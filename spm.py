@@ -84,7 +84,8 @@ def save_conditions_onsets(conditions_onsets,
     return condition_files
 
 
-def get_task_contrasts(mat_file, design_format='nipy', memory=default_memory):
+def get_task_contrasts(mat_file, contrast_names=None,
+                       design_format='nipy', memory=default_memory):
     matfile = memory.cache(load_matfile)(mat_file)['SPM']
     mat_dir = os.path.abspath(os.path.split(mat_file)[0])
     n_scans, n_sessions = _get_n_scans(mat_file)
@@ -94,7 +95,11 @@ def get_task_contrasts(mat_file, design_format='nipy', memory=default_memory):
     condition_names = matfile.xX.name.astype(np.str)
 
     for c in matfile.xCon:
-        image_id = str(c.name)
+        contrast_id = str(c.name)
+        if contrast_names is not None and contrast_id not in contrast_names:
+            continue
+        else:
+            contrast_id = contrast_names[contrast_id]
 
         try:
             c_map = os.path.join(mat_dir, str(c.Vcon.fname))
@@ -103,7 +108,7 @@ def get_task_contrasts(mat_file, design_format='nipy', memory=default_memory):
             c_map = ''
             t_map = ''
 
-        stat_images.setdefault('image_id', []).append(image_id)
+        stat_images.setdefault('contrast_id', []).append(contrast_id)
         stat_images.setdefault('c_maps', []).append(c_map)
         stat_images.setdefault('t_maps', []).append(t_map)
         condition_values = c.c
@@ -111,12 +116,11 @@ def get_task_contrasts(mat_file, design_format='nipy', memory=default_memory):
         if design_format == 'nipy':
             session_masking = _mask_session_design_matrix(condition_names, n_sessions)
             for i, mask in enumerate(session_masking):
-                contrasts.setdefault(i, {}).setdefault('index', []).append(image_id)
+                contrasts.setdefault(i, {}).setdefault('index', []).append(contrast_id)
                 for condition_id, cond_val in zip(condition_names[mask], condition_values[mask]):
                     contrasts.setdefault(i, {}).setdefault(condition_id, []).append(cond_val)
-
         else:
-            contrasts.setdefault('index', []).append(image_id)
+            contrasts.setdefault('index', []).append(contrast_id)
             for condition_id, cond_val in zip(condition_names, condition_values):
                 contrasts.setdefault(condition_id, []).append(cond_val)
 
@@ -192,24 +196,25 @@ def get_bold_timeseries(mat_file, smoothed=False, memory=default_memory):
     return timeseries
 
 
-def load_glm_inputs(mat_files, smoothed_bold=False, design_format='nipy',
-                    memory=default_memory, n_jobs=1):
+def load_glm_inputs(mat_files, smoothed_bold=False, contrast_names=None,
+                    design_format='nipy', memory=default_memory, n_jobs=1):
 
     glm_inputs = Parallel(n_jobs=n_jobs)(delayed(_parallel_load_glm_inputs)(
-            mat_file, smoothed_bold, design_format, memory)
+            mat_file, smoothed_bold, contrast_names, design_format, memory)
             for mat_file in mat_files)
 
     return dict(zip(mat_files, glm_inputs))
 
 
-def _parallel_load_glm_inputs(mat_file, smoothed_bold=False, design_format='nipy',
-                              memory=default_memory):
+def _parallel_load_glm_inputs(mat_file, smoothed_bold=False, contrast_names=None,
+                              design_format='nipy', memory=default_memory):
 
     glm_inputs = {}
 
     design_matrix = load_design_matrix(mat_file, design_format)
-    stat_images, contrasts = get_task_contrasts(mat_file, design_format)
+    stat_images, contrasts = get_task_contrasts(mat_file, contrast_names, design_format)
     bold = get_bold_timeseries(mat_file, smoothed=smoothed_bold)
+
 
     glm_inputs['design'] = design_matrix
     glm_inputs['bold'] = bold
@@ -219,6 +224,11 @@ def _parallel_load_glm_inputs(mat_file, smoothed_bold=False, design_format='nipy
         for sess in contrasts:
             for c, cval in zip(sess.index, sess.values):
                 contrasts_.setdefault(c, []).append(cval.tolist())
+        tasks = np.unique([c.split('_', 1)[0]
+                           for session in contrasts
+                           for c in session.index.values
+                           if c.startswith('task')])
+
     else:
         contrasts_ = dict(zip(contrasts.index, contrasts.values))
 
@@ -227,6 +237,23 @@ def _parallel_load_glm_inputs(mat_file, smoothed_bold=False, design_format='nipy
     for c in contrasts_:
         if np.array(contrasts_[c]).ndim != 3:
             contrasts[c] = contrasts_[c]
+
+    # make a model001_per_run
+    if design_format == 'nipy' and tasks.size > 0:
+        contrasts_per_run = {}
+        for task_id in tasks:
+            for c in contrasts:
+                n_runs = np.array(contrasts[c]).shape[0]
+                for run_id in range(n_runs):
+                    contrast_id = '%s_run%03i_%s' % (task_id, run_id + 1, c.split('_', 1)[1])
+                    run_indices = np.ones(n_runs, dtype=np.bool)
+                    run_indices[run_id] = False
+                    run_indices = np.where(run_indices)[0]
+                    con_val = contrasts[c][:]
+                    for i in run_indices:
+                        con_val[i] = None
+                    contrasts_per_run[contrast_id] = con_val
+        glm_inputs['model001_per_run'] = contrasts_per_run
 
     glm_inputs['model001'] = contrasts
 
