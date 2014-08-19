@@ -98,7 +98,7 @@ def get_task_contrasts(mat_file, contrast_names=None,
         contrast_id = str(c.name)
         if contrast_names is not None and contrast_id not in contrast_names:
             continue
-        else:
+        elif contrast_names is not None:
             contrast_id = contrast_names[contrast_id]
 
         try:
