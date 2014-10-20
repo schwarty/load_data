@@ -65,8 +65,12 @@ def load_conditions_onsets(mat_file, session_names=None,
     for session_id, session in enumerate(sessions):
         for condition_id, u in enumerate(session.U):
             default_condition_name = str(u.name)
-            onsets = u.ons.tolist()
-            durations = u.dur.tolist()
+            try:
+                onsets = u.ons.tolist()
+                durations = u.dur.tolist()
+            except:  # in case of an event that does not occur
+                onsets = [0]
+                durations = [0]
             if not isinstance(onsets, list):
                 onsets = [onsets]
                 durations = [durations]
@@ -125,20 +129,22 @@ def get_task_contrasts(mat_file, contrast_names=None,
     condition_names = matfile.xX.name.astype(np.str)
 
     for c in matfile.xCon:
-        contrast_id = str(c.name)
-        if contrast_names is not None and contrast_id not in contrast_names:
+        contrast_name = str(c.name)
+        if contrast_names is not None and contrast_name not in contrast_names:
             continue
         elif contrast_names is not None:
-            contrast_id = contrast_names[contrast_id]
+            contrast_name = contrast_names[contrast_name]
 
         try:
             c_map = os.path.join(mat_dir, str(c.Vcon.fname))
             t_map = os.path.join(mat_dir, str(c.Vspm.fname))
+            contrast_id = str(c.Vspm.fname).split('spmT_')[1].split('.')[0]
         except:
             c_map = ''
             t_map = ''
-
+            contrast_id = 'none'
         stat_images.setdefault('contrast_id', []).append(contrast_id)
+        stat_images.setdefault('contrast_name', []).append(contrast_name)
         stat_images.setdefault('c_maps', []).append(c_map)
         stat_images.setdefault('t_maps', []).append(t_map)
         condition_values = c.c
@@ -148,19 +154,19 @@ def get_task_contrasts(mat_file, contrast_names=None,
                                                           n_sessions)
             for i, mask in enumerate(session_masking):
                 contrasts.setdefault(i, {}).setdefault(
-                    'index', []).append(contrast_id)
+                    'index', []).append(contrast_name)
                 for condition_id, cond_val in zip(condition_names[mask],
                                                   condition_values[mask]):
                     contrasts.setdefault(i, {}).setdefault(
                         condition_id, []).append(cond_val)
         else:
-            contrasts.setdefault('index', []).append(contrast_id)
+            contrasts.setdefault('index', []).append(contrast_name)
             for condition_id, cond_val in zip(condition_names,
                                               condition_values):
                 contrasts.setdefault(condition_id, []).append(cond_val)
 
     if design_format == 'nipy':
-        contrasts = [pd.DataFrame(c, index=c.pop('index'))
+        contrasts = [pd.DataFrame(c, index=c.pop('index'))[condition_names]
                      for c in contrasts.values()]
     else:
         contrasts = pd.DataFrame(contrasts, index=contrasts.pop('index'))
@@ -199,11 +205,12 @@ def load_design_matrix(mat_file, design_format='nipy', memory=default_memory):
             # mask the session matrices with their regressors only
             dm_hmasked = pd.DataFrame(
                 dict(zip(condition_names[mask], dm[:, mask].T)))
-            design_matrices.append(dm_hmasked)
+            design_matrices.append(dm_hmasked[condition_names[mask]])
         return design_matrices
 
     else:  # plain design matrix
-        return pd.DataFrame(dict(zip(condition_names, design_matrix)))
+        dm = pd.DataFrame(dict(zip(condition_names, design_matrix)))
+        return dm[condition_names]
 
 
 def get_bold_timeseries(mat_file, smoothed=False, memory=default_memory):
